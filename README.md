@@ -109,22 +109,27 @@ Para ejecutarse a la hora prevista, el ordenador o servidor debe estar encendido
 
 ## GitHub
 
-Git y GitHub CLI (`gh`) permiten publicar este proyecto en tu cuenta. Primero autentica GitHub CLI desde PowerShell:
+Esta carpeta ya es un repositorio Git y tiene configurado el remoto `origin`. Para subir la rama local `main` al repositorio enlazado, abre PowerShell en esta carpeta y comprueba primero el estado:
 
 ```powershell
-gh auth login
+git remote -v
+git status
 ```
 
-Cuando hayas elegido el nombre y la visibilidad del repositorio, desde la carpeta del proyecto puedes crearlo y subir los archivos con:
+Si los archivos del proyecto aparecen como no seguidos, agrégalos y revisa de nuevo el estado:
 
 ```powershell
-git init
-git add .
-git commit -m "Crear monitor de disponibilidad web"
-gh repo create automatizacion_web --public --source . --remote origin --push
+git add .gitignore README.md monitor.py requirements.txt urls.txt
+git status
 ```
 
-Este comando crea el repositorio publico `automatizacion_web` en tu cuenta y sube el proyecto. `.gitignore` evita subir los registros y el estado de ejecucion. Revisa siempre que no hayas agregado tokens ni otros secretos antes de publicar. El codigo sera visible para cualquier persona; no publiques tokens ni datos privados.
+Cuando el estado sea correcto, publica la rama:
+
+```powershell
+git push -u origin main
+```
+
+No hace falta ejecutar `git init` ni crear otro remoto con `gh repo create`: eso puede fallar cuando el repositorio local o `origin` ya existen. Si Git informa que la rama remota ya tiene cambios, no uses `--force`; primero revisa el mensaje y sincroniza el historial. `.gitignore` excluye los registros y el estado de ejecucion. Revisa siempre que no haya tokens ni datos privados antes de publicar.
 
 ## Presentacion del proyecto
 
