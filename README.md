@@ -57,7 +57,9 @@ automatizacion_web/
 ├── README.md          # Este documento
 ├── MFU.md             # Manual de uso rápido
 ├── FICHA-DISENO.md    # Ficha de diseño de la automatización
+├── instalar.ps1       # Instala dependencias y crea la tarea de las 9:00
 ├── monitor.py         # Programa
+├── test_monitor.py    # Pruebas automáticas
 ├── requirements.txt   # Dependencias
 ├── urls.txt           # URLs que se comprueban
 ├── registro.csv       # Se crea al ejecutar (histórico)
@@ -72,15 +74,26 @@ automatizacion_web/
 
 Requisitos: Windows con Python 3.10 o superior.
 
-Abre PowerShell en la carpeta del proyecto:
+Abre PowerShell en la carpeta del proyecto y ejecuta el instalador:
 
 ```powershell
-py --version
+powershell -ExecutionPolicy Bypass -File .\instalar.ps1
+```
+
+El instalador hace tres cosas:
+
+1. Crea el entorno virtual `.venv`.
+2. Instala las dependencias. La única es `requests`, que sirve para hacer peticiones HTTP.
+3. Crea la tarea **Monitor web** en el Programador de tareas, todos los días a las 9:00 (ver apartado 6).
+
+Se puede ejecutar varias veces: si la tarea ya existe, la sustituye.
+
+Si prefieres hacerlo a mano:
+
+```powershell
 py -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-
-La única dependencia es `requests`, que sirve para hacer peticiones HTTP.
 
 ---
 
@@ -119,11 +132,13 @@ setx MONITOR_TIEMPO_MAXIMO 5
 
 El token **nunca** se escribe en el código ni en ningún archivo del proyecto. Así no se sube a GitHub por error.
 
-Para comprobarlo:
+Para comprobar que funciona, envía un mensaje de prueba:
 
 ```powershell
-echo $env:TELEGRAM_CHAT_ID
+.venv\Scripts\python.exe monitor.py --probar-telegram
 ```
+
+Debe aparecer `Mensaje de prueba enviado` y llegarte el mensaje al móvil.
 
 ---
 
@@ -145,6 +160,16 @@ ERROR HTTP: https://mi-web.com/contacto (95 ms) HTTP 404 Not Found
 
 ## 6. Programar la ejecución diaria (Programador de tareas)
 
+`instalar.ps1` ya crea la tarea. Para comprobarla:
+
+```powershell
+Get-ScheduledTaskInfo -TaskName "Monitor web"
+```
+
+`NextRunTime` debe ser mañana a las 9:00.
+
+Si quieres crearla a mano, sigue estos pasos:
+
 1. Abre **Programador de tareas** desde el menú Inicio.
 2. Pulsa **Crear tarea básica**.
 3. Nombre: `Monitor web`. Siguiente.
@@ -161,7 +186,27 @@ Si la tarea no envía avisos pero desde PowerShell sí, cierra sesión en Window
 
 ---
 
-## 7. Prueba manual
+## 7. Pruebas
+
+### Pruebas automáticas
+
+```powershell
+.venv\Scripts\python.exe -m unittest -v
+```
+
+Comprueban, con un servidor local y un Telegram simulado, estos casos:
+
+- una página disponible;
+- un error 404;
+- que el aviso no se repite;
+- la recuperación;
+- un error de conexión;
+- un tiempo excedido;
+- que, si Telegram falla, el aviso se reintenta en la siguiente ejecución.
+
+No necesitan Internet ni token, y no tocan tu `registro.csv`.
+
+### Prueba manual
 
 Esta prueba usa un servidor web local que viene con Python, así no hace falta tocar una web real. Necesitas dos ventanas de PowerShell abiertas en la carpeta del proyecto.
 

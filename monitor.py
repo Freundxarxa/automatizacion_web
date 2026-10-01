@@ -149,6 +149,13 @@ def avisar_si_cambia(resultado, estado):
 # --- Programa principal ----------------------------------------------------
 
 def main():
+    # "py monitor.py --probar-telegram" solo envía un mensaje de prueba.
+    if "--probar-telegram" in sys.argv:
+        if enviar_telegram("Prueba del monitor web: Telegram está bien configurado."):
+            print("Mensaje de prueba enviado")
+            return 0
+        return 1
+
     if TIEMPO_MAXIMO <= 0:
         print("MONITOR_TIEMPO_MAXIMO debe ser mayor que cero", file=sys.stderr)
         return 1

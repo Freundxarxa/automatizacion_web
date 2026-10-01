@@ -47,6 +47,22 @@ En el Programador de tareas, clic derecho sobre **Monitor web**:
 - **Habilitar**: la reanuda.
 - **Eliminar**: la quita (el proyecto sigue en la carpeta).
 
+También desde PowerShell:
+
+```powershell
+Disable-ScheduledTask -TaskName "Monitor web"
+Enable-ScheduledTask -TaskName "Monitor web"
+Unregister-ScheduledTask -TaskName "Monitor web" -Confirm:$false
+```
+
+Para volver a crearla: `powershell -ExecutionPolicy Bypass -File .\instalar.ps1`.
+
+## Comprobar Telegram
+
+```powershell
+.venv\Scripts\python.exe monitor.py --probar-telegram
+```
+
 ## Si algo falla
 
 | Síntoma | Qué mirar |
