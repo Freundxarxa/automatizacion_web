@@ -1,3 +1,9 @@
+"""Monitor de disponibilidad web.
+
+Comprueba las URLs de urls.txt, guarda cada resultado en registro.csv
+y avisa por Telegram cuando una URL empieza a fallar o se recupera.
+"""
+
 import csv
 import json
 import os
@@ -9,175 +15,163 @@ from time import perf_counter
 import requests
 
 
-PROJECT_DIR = Path(__file__).resolve().parent
-URLS_FILE = PROJECT_DIR / "urls.txt"
-LOG_FILE = PROJECT_DIR / "checks.csv"
-STATE_FILE = PROJECT_DIR / "state.json"
-TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "10"))
+# --- Configuración ---------------------------------------------------------
+
+CARPETA = Path(__file__).resolve().parent
+ARCHIVO_URLS = CARPETA / "urls.txt"
+ARCHIVO_REGISTRO = CARPETA / "registro.csv"
+ARCHIVO_ESTADO = CARPETA / "estado.json"
+
+# Segundos máximos que puede tardar una respuesta. Se cambia con la
+# variable de entorno MONITOR_TIEMPO_MAXIMO (por defecto, 10 segundos).
+TIEMPO_MAXIMO = float(os.getenv("MONITOR_TIEMPO_MAXIMO", "10"))
 
 
-def load_urls():
-    with URLS_FILE.open("r", encoding="utf-8") as file:
-        return [
-            line.strip()
-            for line in file
-            if line.strip() and not line.strip().startswith("#")
-        ]
+# --- Lectura de la configuración -------------------------------------------
+
+def leer_urls():
+    """Devuelve las URLs de urls.txt, sin líneas vacías ni comentarios."""
+    urls = []
+    with ARCHIVO_URLS.open(encoding="utf-8") as archivo:
+        for linea in archivo:
+            linea = linea.strip()
+            if linea and not linea.startswith("#"):
+                urls.append(linea)
+    return urls
 
 
-def check_url(url):
-    started_at = perf_counter()
+# --- Comprobación de una URL -----------------------------------------------
+
+def comprobar_url(url):
+    """Hace una petición a la URL y devuelve un diccionario con el resultado.
+
+    Estados posibles: OK, ERROR HTTP, TIEMPO EXCEDIDO y ERROR DE CONEXION.
+    """
+    inicio = perf_counter()
     try:
-        response = requests.get(url, timeout=TIMEOUT_SECONDS)
-        elapsed_seconds = perf_counter() - started_at
-        response_ms = round(elapsed_seconds * 1000, 2)
-
-        if elapsed_seconds > TIMEOUT_SECONDS:
-            return {
-                "url": url,
-                "status": "TIEMPO AGOTADO",
-                "response_ms": response_ms,
-                "detail": f"La respuesta supero el limite de {TIMEOUT_SECONDS:g} segundos",
-            }
-
-        if response.status_code >= 400:
-            return {
-                "url": url,
-                "status": f"ERROR HTTP {response.status_code}",
-                "response_ms": response_ms,
-                "detail": f"HTTP {response.status_code} {response.reason}",
-            }
-
-        return {
-            "url": url,
-            "status": "OK",
-            "response_ms": response_ms,
-            "detail": f"HTTP {response.status_code}",
-        }
+        respuesta = requests.get(url, timeout=TIEMPO_MAXIMO)
     except requests.Timeout:
-        response_ms = round((perf_counter() - started_at) * 1000, 2)
-        return {
-            "url": url,
-            "status": "TIEMPO AGOTADO",
-            "response_ms": response_ms,
-            "detail": f"La respuesta supero el limite de {TIMEOUT_SECONDS:g} segundos",
-        }
+        estado = "TIEMPO EXCEDIDO"
+        detalle = f"Sin respuesta en {TIEMPO_MAXIMO:g} s"
     except requests.RequestException as error:
-        response_ms = round((perf_counter() - started_at) * 1000, 2)
-        return {
-            "url": url,
-            "status": "ERROR DE CONEXION",
-            "response_ms": response_ms,
-            "detail": str(error),
-        }
+        estado = "ERROR DE CONEXION"
+        detalle = type(error).__name__
+    else:
+        segundos = perf_counter() - inicio
+        if respuesta.status_code >= 400:
+            estado = "ERROR HTTP"
+            detalle = f"HTTP {respuesta.status_code} {respuesta.reason}"
+        elif segundos > TIEMPO_MAXIMO:
+            estado = "TIEMPO EXCEDIDO"
+            detalle = f"Tardó {segundos:.1f} s (máximo {TIEMPO_MAXIMO:g} s)"
+        else:
+            estado = "OK"
+            detalle = f"HTTP {respuesta.status_code}"
+
+    tiempo_ms = round((perf_counter() - inicio) * 1000)
+    return {"url": url, "estado": estado, "tiempo_ms": tiempo_ms, "detalle": detalle}
 
 
-def append_result(result):
-    file_exists = LOG_FILE.exists()
-    with LOG_FILE.open("a", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(
-            file,
-            fieldnames=["fecha", "url", "estado", "tiempo_ms", "detalle"],
-        )
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(
-            {
-                "fecha": datetime.now().astimezone().isoformat(timespec="seconds"),
-                "url": result["url"],
-                "estado": result["status"],
-                "tiempo_ms": result["response_ms"],
-                "detalle": result["detail"],
-            }
-        )
+# --- Registro y estado -----------------------------------------------------
+
+def guardar_en_registro(resultado):
+    """Añade una fila a registro.csv. Crea la cabecera la primera vez."""
+    es_nuevo = not ARCHIVO_REGISTRO.exists()
+    with ARCHIVO_REGISTRO.open("a", newline="", encoding="utf-8") as archivo:
+        columnas = ["fecha", "url", "estado", "tiempo_ms", "detalle"]
+        escritor = csv.DictWriter(archivo, fieldnames=columnas)
+        if es_nuevo:
+            escritor.writeheader()
+        fila = dict(resultado)
+        fila["fecha"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        escritor.writerow(fila)
 
 
-def load_state():
-    if not STATE_FILE.exists():
+def leer_estado():
+    """Devuelve el último estado conocido de cada URL: "OK" o "FALLO"."""
+    if not ARCHIVO_ESTADO.exists():
         return {}
-    with STATE_FILE.open("r", encoding="utf-8") as file:
-        return json.load(file)
+    with ARCHIVO_ESTADO.open(encoding="utf-8") as archivo:
+        return json.load(archivo)
 
 
-def save_state(state):
-    with STATE_FILE.open("w", encoding="utf-8") as file:
-        json.dump(state, file, indent=2, ensure_ascii=False)
+def guardar_estado(estado):
+    with ARCHIVO_ESTADO.open("w", encoding="utf-8") as archivo:
+        json.dump(estado, archivo, indent=2, ensure_ascii=False)
 
 
-def send_telegram(message):
+# --- Telegram --------------------------------------------------------------
+
+def enviar_telegram(texto):
+    """Envía un mensaje al chat configurado. Devuelve True si se envió."""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
-        raise RuntimeError(
-            "Configura las variables TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID"
+        print("  Aviso no enviado: faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID")
+        return False
+
+    try:
+        respuesta = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat_id, "text": texto},
+            timeout=10,
         )
-
-    response = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data={"chat_id": chat_id, "text": message},
-        timeout=TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    telegram_result = response.json()
-    if not telegram_result.get("ok"):
-        raise RuntimeError("Telegram no pudo enviar el mensaje")
+        respuesta.raise_for_status()
+    except requests.RequestException as error:
+        # No se muestra el error completo porque la URL contiene el token.
+        print(f"  Aviso no enviado: Telegram respondió con error ({type(error).__name__})")
+        return False
+    return True
 
 
-def notify_on_change(result, state):
-    url = result["url"]
-    was_failing = state.get(url, False)
-    is_failing = result["status"] != "OK"
+def avisar_si_cambia(resultado, estado):
+    """Envía un aviso solo cuando la URL pasa de OK a FALLO o de FALLO a OK."""
+    url = resultado["url"]
+    anterior = estado.get(url, "OK")
+    actual = "OK" if resultado["estado"] == "OK" else "FALLO"
 
-    if is_failing != was_failing:
-        if is_failing:
-            message = (
-                f"FALLO: {url}\n"
-                f"Problema: {result['detail']}\n"
-                f"Estado: {result['status']}"
-            )
-        else:
-            message = (
-                f"RECUPERADA: {url}\n"
-                f"La pagina vuelve a responder ({result['detail']})."
-            )
+    if actual == anterior:
+        return  # Sin cambios: no se repite el aviso.
 
-        try:
-            send_telegram(message)
-        except (requests.RequestException, RuntimeError, ValueError) as error:
-            print(f"No se pudo enviar el aviso de {url}: {error}", file=sys.stderr)
-            return
+    if actual == "FALLO":
+        texto = f"FALLO en {url}\nProblema: {resultado['estado']} - {resultado['detalle']}"
+    else:
+        texto = f"RECUPERADA {url}\nVuelve a responder ({resultado['detalle']})"
 
-    state[url] = is_failing
-    save_state(state)
+    # El estado solo cambia si el aviso se ha enviado. Si Telegram falla,
+    # se volverá a intentar en la siguiente ejecución.
+    if enviar_telegram(texto):
+        estado[url] = actual
+        guardar_estado(estado)
+        print("  Aviso enviado por Telegram")
 
+
+# --- Programa principal ----------------------------------------------------
 
 def main():
-    if TIMEOUT_SECONDS <= 0:
-        print("REQUEST_TIMEOUT_SECONDS debe ser mayor que cero", file=sys.stderr)
+    if TIEMPO_MAXIMO <= 0:
+        print("MONITOR_TIEMPO_MAXIMO debe ser mayor que cero", file=sys.stderr)
         return 1
 
     try:
-        urls = load_urls()
-        state = load_state()
+        urls = leer_urls()
+        estado = leer_estado()
     except (OSError, json.JSONDecodeError) as error:
-        print(f"No se pudo leer la configuracion: {error}", file=sys.stderr)
+        print(f"No se pudo leer la configuración: {error}", file=sys.stderr)
         return 1
 
     if not urls:
-        print("No hay URLs configuradas en urls.txt", file=sys.stderr)
+        print("No hay URLs en urls.txt", file=sys.stderr)
         return 1
 
     for url in urls:
-        result = check_url(url)
-        append_result(result)
-        print(
-            f"{result['status']}: {url} "
-            f"({result['response_ms']} ms) - {result['detail']}"
-        )
-        notify_on_change(result, state)
+        resultado = comprobar_url(url)
+        guardar_en_registro(resultado)
+        print(f"{resultado['estado']}: {url} ({resultado['tiempo_ms']} ms) {resultado['detalle']}")
+        avisar_si_cambia(resultado, estado)
 
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

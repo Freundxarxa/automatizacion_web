@@ -1,136 +1,216 @@
 # Monitor de disponibilidad web
 
-## Diseno
+Programa en Python que comprueba cada día a las 9:00 una lista de URLs, guarda el resultado en un registro y avisa por Telegram cuando una página falla o vuelve a funcionar.
 
-- **Desencadenante:** el Programador de tareas de Windows inicia `monitor.py` todos los dias a las 9:00.
-- **Acciones:** lee las URLs de `urls.txt`, hace una peticion HTTP a cada una, mide el tiempo y anade el resultado a `checks.csv`.
-- **Condiciones:** un error HTTP (codigo 400 o superior), un problema de conexion o superar el tiempo limite configurable se considera un fallo. Solo se envia un aviso cuando una URL pasa de funcionar a fallar. Se envia otro cuando vuelve a funcionar.
+No usa inteligencia artificial: todas las decisiones son reglas fijas.
 
-La comprobacion solo cubre las URLs indicadas. Una respuesta HTTP correcta no garantiza que todas las funciones, contenidos o elementos visuales de la pagina funcionen.
+---
 
-## Estructura
+## 1. Diseño
+
+| Pieza | En este proyecto |
+|---|---|
+| **Evento** | El Programador de tareas de Windows ejecuta `monitor.py` todos los días a las 9:00. Para probar, se lanza a mano con `py monitor.py`. |
+| **Entrada** | Las URLs de `urls.txt`, el tiempo máximo (`MONITOR_TIEMPO_MAXIMO`) y el último estado guardado en `estado.json`. |
+| **Acción** | Pedir cada URL, medir el tiempo y añadir una fila a `registro.csv`. |
+| **Decisión** | ¿La URL ha fallado? ¿Ha cambiado respecto a la última vez? |
+| **Verificación** | Telegram confirma el envío; solo entonces se actualiza `estado.json`. |
+| **Salida** | `registro.csv` con el histórico y, si hay un cambio, un mensaje en Telegram. |
+
+### Condiciones
+
+Una URL **falla** si ocurre una de estas tres cosas:
+
+| Estado | Cuándo |
+|---|---|
+| `ERROR HTTP` | El servidor responde con un código 400 o superior (404, 500...). |
+| `ERROR DE CONEXION` | No se puede conectar: servidor apagado, dominio inexistente, sin Internet... |
+| `TIEMPO EXCEDIDO` | La respuesta tarda más que el tiempo máximo configurado. |
+
+En cualquier otro caso el estado es `OK`.
+
+### Cuándo se envía un aviso
+
+| Estado anterior | Estado actual | Qué hace |
+|---|---|---|
+| OK | OK | Solo guarda el registro. |
+| OK | FALLO | Guarda el registro y **avisa del fallo**. |
+| FALLO | FALLO | Solo guarda el registro (no repite el aviso). |
+| FALLO | OK | Guarda el registro y **avisa de la recuperación**. |
+
+Si el aviso no se puede enviar (sin Internet, token incorrecto...), el estado no cambia y se volverá a intentar en la siguiente ejecución.
+
+### Alcance y límites
+
+- Solo comprueba las URLs escritas en `urls.txt`. No recorre la web ni busca enlaces rotos.
+- No detecta errores visuales ni de contenido.
+- **Una respuesta HTTP correcta no garantiza que todas las funciones de la página funcionen.** Un formulario, un carrito o un inicio de sesión pueden fallar aunque la página cargue con código 200.
+- Para ejecutarse a las 9:00, el ordenador o servidor debe estar **encendido y conectado a Internet**.
+
+---
+
+## 2. Estructura de carpetas
 
 ```text
-monitor-web/
-|-- .gitignore
-|-- README.md
-|-- monitor.py
-|-- requirements.txt
-|-- urls.txt
-|-- checks.csv   (se crea al ejecutar)
-|-- state.json   (se crea al ejecutar)
+automatizacion_web/
+├── .gitignore         # Archivos que no se suben a Git
+├── README.md          # Este documento
+├── MFU.md             # Manual de uso rápido
+├── FICHA-DISENO.md    # Ficha de diseño de la automatización
+├── monitor.py         # Programa
+├── requirements.txt   # Dependencias
+├── urls.txt           # URLs que se comprueban
+├── registro.csv       # Se crea al ejecutar (histórico)
+└── estado.json        # Se crea al ejecutar (último estado de cada URL)
 ```
 
-## Instalacion
+`registro.csv` y `estado.json` no se suben a Git: son datos de cada equipo.
 
-Abre PowerShell en la carpeta del proyecto y ejecuta:
+---
+
+## 3. Instalación
+
+Requisitos: Windows con Python 3.10 o superior.
+
+Abre PowerShell en la carpeta del proyecto:
 
 ```powershell
+py --version
 py -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Si PowerShell bloquea la activacion del entorno, puedes instalar y ejecutar Python sin activarlo:
+La única dependencia es `requests`, que sirve para hacer peticiones HTTP.
+
+---
+
+## 4. Configuración
+
+### URLs
+
+Edita `urls.txt` y escribe una URL completa por línea, con `https://` o `http://`. Las líneas vacías y las que empiezan por `#` se ignoran.
+
+```text
+https://mi-web.com/
+https://mi-web.com/contacto
+```
+
+### Tiempo máximo (opcional)
+
+Por defecto son 10 segundos. Para cambiarlo:
 
 ```powershell
-py -m pip install -r requirements.txt
-py monitor.py
+setx MONITOR_TIEMPO_MAXIMO 5
 ```
-
-## Configuracion
-
-### URLs y tiempo limite
-
-Edita `urls.txt`: escribe una URL completa por linea, incluyendo `https://` o `http://`. Las lineas vacias y las que empiezan por `#` se ignoran. Cambia `https://example.com` por las URLs de tu sitio.
-
-El limite por defecto es de 10 segundos. Para cambiarlo, define la variable de entorno `REQUEST_TIMEOUT_SECONDS`, por ejemplo:
-
-```powershell
-[Environment]::SetEnvironmentVariable("REQUEST_TIMEOUT_SECONDS", "5", "User")
-```
-
-Cierra y vuelve a abrir las aplicaciones para que lean las variables de entorno actualizadas.
 
 ### Telegram
 
-1. En Telegram, habla con `@BotFather`, usa `/newbot` y guarda el token que te entrega.
-2. Abre una conversacion con tu nuevo bot y pulsa **Iniciar**.
-3. Obtiene tu `chat_id` consultando `https://api.telegram.org/bot<TU_TOKEN>/getUpdates` y leyendo `message.chat.id` en la respuesta. No compartas el token ni lo guardes en este proyecto.
-4. En Windows, busca **Editar las variables de entorno de tu cuenta** y crea estas dos variables de usuario:
-   - `TELEGRAM_BOT_TOKEN`: el token del bot.
-   - `TELEGRAM_CHAT_ID`: el identificador de tu conversacion.
-5. Cierra y vuelve a abrir VS Code y PowerShell. Si el Programador de tareas no ve las variables, cierra la sesion de Windows y vuelve a iniciarla.
-
-El token no se escribe en el codigo ni en `urls.txt`. Si falta alguna variable, los resultados se siguen registrando y el aviso pendiente se intentara de nuevo en la siguiente ejecucion.
-
-## Ejecucion manual
-
-```powershell
-py monitor.py
-```
-
-Cada ejecucion agrega una fila a `checks.csv`. `state.json` guarda si cada URL estaba fallando, para evitar repetir avisos durante el mismo fallo y detectar la recuperacion.
-
-## Prueba manual
-
-Configura Telegram antes de esta prueba para recibir los dos avisos. La prueba utiliza el servidor HTTP incluido con Python y solo escucha en tu propio equipo.
-
-1. En `urls.txt`, deja esta URL:
-
-   ```text
-   http://127.0.0.1:8000/
-   ```
-
-2. En una ventana de PowerShell abierta en la carpeta del proyecto, inicia el servidor:
+1. En Telegram, abre un chat con **@BotFather**, escribe `/newbot` y sigue los pasos. Al final te dará un **token**.
+2. Abre el chat con tu nuevo bot y pulsa **Iniciar** (o escríbele cualquier mensaje).
+3. En el navegador abre `https://api.telegram.org/bot<TOKEN>/getUpdates`, sustituyendo `<TOKEN>`. Busca `"chat":{"id":` y copia ese número: es tu **chat_id**.
+4. Guarda los dos datos como variables de entorno de tu usuario:
 
    ```powershell
-   py -m http.server 8000 --bind 127.0.0.1
+   setx TELEGRAM_BOT_TOKEN "123456789:ABC..."
+   setx TELEGRAM_CHAT_ID "123456789"
    ```
 
-3. En otra ventana, ejecuta `py monitor.py`. Debe registrar `OK` en `checks.csv` y no enviar un aviso.
-4. Deten el servidor con `Ctrl+C` y vuelve a ejecutar `py monitor.py`. Debe registrar `ERROR DE CONEXION` y enviar un aviso de fallo.
-5. Inicia de nuevo el servidor con el comando del paso 2 y ejecuta el monitor. Debe registrar `OK` y enviar el aviso de recuperacion.
-6. Ejecuta el monitor una vez mas mientras el servidor siga activo. Debe registrar el resultado sin enviar otro mensaje.
+5. Cierra y vuelve a abrir PowerShell (y VS Code) para que lean las variables nuevas.
 
-Al terminar, puedes detener el servidor con `Ctrl+C`. Los resultados y el estado de la prueba permanecen en `checks.csv` y `state.json`; para empezar una prueba desde cero, elimina esos archivos manualmente.
+El token **nunca** se escribe en el código ni en ningún archivo del proyecto. Así no se sube a GitHub por error.
 
-## Programador de tareas de Windows
-
-1. Abre **Programador de tareas** desde el menu Inicio y selecciona **Crear tarea basica**.
-2. Ponle un nombre, por ejemplo `Monitor web`, y elige el desencadenador **Diariamente** a las **9:00**.
-3. Como accion, elige **Iniciar un programa**.
-4. En **Programa o script**, indica la ruta completa a Python. Si usaste el entorno virtual, sera algo parecido a `C:\ruta\al\proyecto\.venv\Scripts\python.exe`.
-5. En **Agregar argumentos**, escribe la ruta completa a `monitor.py`, por ejemplo `"C:\ruta\al\proyecto\monitor.py"`.
-6. En **Iniciar en**, indica la carpeta del proyecto, por ejemplo `C:\ruta\al\proyecto`.
-7. Termina el asistente y usa **Ejecutar** desde la tarea para comprobar que funciona.
-
-Para ejecutarse a la hora prevista, el ordenador o servidor debe estar encendido, despierto y conectado a Internet. Si esta tarea no encuentra las variables de Telegram, vuelve a iniciar la sesion de Windows o configura la tarea para ejecutarse con la misma cuenta de usuario.
-
-## GitHub
-
-Esta carpeta ya es un repositorio Git y tiene configurado el remoto `origin`. Para subir la rama local `main` al repositorio enlazado, abre PowerShell en esta carpeta y comprueba primero el estado:
+Para comprobarlo:
 
 ```powershell
-git remote -v
-git status
+echo $env:TELEGRAM_CHAT_ID
 ```
 
-Si los archivos del proyecto aparecen como no seguidos, agrégalos y revisa de nuevo el estado:
+---
+
+## 5. Ejecución manual
 
 ```powershell
-git add .gitignore README.md monitor.py requirements.txt urls.txt
-git status
+.venv\Scripts\python.exe monitor.py
 ```
 
-Cuando el estado sea correcto, publica la rama:
+Salida de ejemplo:
+
+```text
+OK: https://mi-web.com/ (182 ms) HTTP 200
+ERROR HTTP: https://mi-web.com/contacto (95 ms) HTTP 404 Not Found
+  Aviso enviado por Telegram
+```
+
+---
+
+## 6. Programar la ejecución diaria (Programador de tareas)
+
+1. Abre **Programador de tareas** desde el menú Inicio.
+2. Pulsa **Crear tarea básica**.
+3. Nombre: `Monitor web`. Siguiente.
+4. Desencadenador: **Diariamente**, a las **9:00:00**, cada 1 día.
+5. Acción: **Iniciar un programa**.
+   - **Programa o script:** `C:\Users\TU_USUARIO\Desktop\automatizacion_web\.venv\Scripts\python.exe`
+   - **Agregar argumentos:** `monitor.py`
+   - **Iniciar en:** `C:\Users\TU_USUARIO\Desktop\automatizacion_web`
+6. Finaliza el asistente.
+7. Abre las propiedades de la tarea, pestaña **Configuración**, y marca **Ejecutar la tarea lo antes posible después de perder un inicio programado**. Así, si el ordenador estaba apagado a las 9:00, se ejecutará al encenderlo.
+8. Haz clic derecho en la tarea y pulsa **Ejecutar** para probarla. Comprueba que se ha añadido una fila nueva en `registro.csv`.
+
+Si la tarea no envía avisos pero desde PowerShell sí, cierra sesión en Windows y vuelve a entrar para que la tarea lea las variables de Telegram.
+
+---
+
+## 7. Prueba manual
+
+Esta prueba usa un servidor web local que viene con Python, así no hace falta tocar una web real. Necesitas dos ventanas de PowerShell abiertas en la carpeta del proyecto.
+
+**Preparación** (ventana 1):
 
 ```powershell
-git push -u origin main
+mkdir web_prueba
+Set-Content web_prueba\index.html "Inicio"
+py -m http.server 8000 --bind 127.0.0.1 --directory web_prueba
 ```
 
-No hace falta ejecutar `git init` ni crear otro remoto con `gh repo create`: eso puede fallar cuando el repositorio local o `origin` ya existen. Si Git informa que la rama remota ya tiene cambios, no uses `--force`; primero revisa el mensaje y sincroniza el historial. `.gitignore` excluye los registros y el estado de ejecucion. Revisa siempre que no haya tokens ni datos privados antes de publicar.
+Deja esa ventana abierta. En `urls.txt` escribe solo:
 
-## Presentacion del proyecto
+```text
+http://127.0.0.1:8000/
+http://127.0.0.1:8000/contacto.html
+```
 
-Este proyecto comprueba una lista concreta de paginas una vez al dia. Guarda la fecha, la URL, el estado y el tiempo de respuesta en un CSV. Si una pagina falla, envia un aviso por Telegram; conserva el estado anterior para no repetir el aviso mientras siga fallando y avisa cuando se recupera. No recorre el sitio ni comprueba su aspecto visual, y una respuesta HTTP correcta no demuestra que todas sus funciones trabajen bien. La tarea depende de que el ordenador o servidor este encendido y conectado a Internet a la hora programada.
+**Pasos** (ventana 2):
+
+| Paso | Qué hago | Resultado esperado | Evidencia |
+|---|---|---|---|
+| 1 | `.venv\Scripts\python.exe monitor.py` | `/` da `OK`. `contacto.html` da `ERROR HTTP 404`. | Llega **un aviso de FALLO** de `contacto.html`. |
+| 2 | Vuelvo a ejecutar el monitor | Los mismos resultados. | **No llega ningún mensaje** (no se repite). |
+| 3 | `Set-Content web_prueba\contacto.html "Contacto"` y ejecuto el monitor | Las dos URLs dan `OK`. | Llega **un aviso de RECUPERADA**. |
+| 4 | Ejecuto el monitor otra vez | Las dos dan `OK`. | No llega ningún mensaje. |
+| 5 | Paro el servidor (`Ctrl+C` en la ventana 1) y ejecuto el monitor | Las dos dan `ERROR DE CONEXION`. | Llegan **dos avisos de FALLO**. |
+| 6 | Arranco el servidor de nuevo y ejecuto el monitor | Las dos dan `OK`. | Llegan **dos avisos de RECUPERADA**. |
+
+En cada paso, abre `registro.csv` y comprueba que hay una fila nueva por URL con la fecha, el estado y el tiempo.
+
+Para probar el tiempo máximo, ejecuta en la ventana 2 `$env:MONITOR_TIEMPO_MAXIMO="0.001"` y después el monitor: el estado será `TIEMPO EXCEDIDO`. Cierra esa ventana al terminar para volver al valor normal.
+
+Al terminar, vuelve a poner tus URLs reales en `urls.txt` y borra `estado.json` y `registro.csv` si quieres empezar de cero.
+
+---
+
+## 8. Presentación del proyecto
+
+> He creado una automatización que vigila mi web sin que yo tenga que entrar a mirarla.
+>
+> **El evento** es una hora: el Programador de tareas de Windows lanza el programa cada día a las 9:00.
+>
+> **La acción** es pedir cada URL de una lista, medir cuánto tarda y guardar en un CSV la fecha, la URL, el estado y el tiempo.
+>
+> **La decisión** son reglas fijas: si hay un error HTTP, no hay conexión o tarda demasiado, es un fallo. Además se compara con el estado del día anterior, guardado en un archivo JSON. Solo aviso por Telegram cuando algo cambia: cuando empieza a fallar y cuando se recupera. Así no recibo el mismo mensaje cada día.
+>
+> **La verificación**: el estado solo se actualiza si Telegram confirma que el mensaje se ha enviado. Si falla el envío, se reintenta al día siguiente.
+>
+> **Los límites**: solo comprueba las URLs que yo indico, y que una página responda bien no significa que todo funcione dentro de ella. Además, el ordenador tiene que estar encendido y conectado.
+>
+> Lo he probado con un servidor local: una página que funciona, una que da 404, su recuperación y el servidor apagado.

@@ -1,2 +1,2 @@
-# Sustituye estos ejemplos por las URLs concretas que quieras comprobar.
-https://example.com
+# Una URL completa por línea. Las líneas que empiezan por # se ignoran.
+https://example.com/
